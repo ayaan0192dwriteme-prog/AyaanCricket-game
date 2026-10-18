@@ -1,0 +1,275 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head><title>3D Cricket Game by Mohammed Ayaan</title>
+<meta name="description" content="Play a free 3D Cricket game created by Mohammed Ayaan.">
+<meta name="author" content="Mohammed Ayaan">
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Swipe Cricket 3D</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#72b9dc;font-family:Arial;color:white;touch-action:none}
+canvas{display:block;width:100vw;height:100vh;touch-action:none}
+#hud{position:fixed;top:12px;left:12px;background:#071b2cdd;padding:14px;border-radius:14px;line-height:1.6;pointer-events:none}
+#score{font-size:26px;font-weight:bold}
+#status{position:fixed;top:22%;left:50%;transform:translateX(-50%);background:#071b2cdd;padding:12px 18px;border-radius:20px;font-weight:bold;white-space:nowrap}
+#hint{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);width:95%;text-align:center;text-shadow:0 2px 5px #000;font-weight:bold}
+#menu{position:fixed;inset:0;background:#061522dd;display:flex;align-items:center;justify-content:center}
+.card{background:#102c40;padding:28px;border-radius:22px;text-align:center;width:min(90%,380px);box-shadow:0 10px 40px #0008}
+h1{margin:0 0 12px;font-size:34px}
+button{border:0;background:#ffcf60;color:#17212b;font-size:17px;font-weight:bold;padding:14px 25px;border-radius:12px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud">
+  <div>🏏 SWIPE CRICKET</div>
+  <div id="score">0 / 0</div>
+  <div>Overs: <span id="overs">0.0</span> / 3</div>
+  <div>Target: 30</div>
+</div>
+<div id="status">READY TO PLAY</div>
+<div id="hint">Swipe when the ball arrives • Longer swipe = harder shot</div>
+<div id="menu">
+  <div class="card">
+    <h1>🏏 CRICKET 3D</h1>
+    <p>Bat from the batsman's POV!</p>
+    <p>⬆ Swipe up for loft<br>⬅➡ Swipe sideways to aim<br>💥 Swipe farther for power</p>
+    <button id="play">START MATCH</button>
+  </div>
+</div>
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+const $=id=>document.getElementById(id);
+let W,H,D=1;
+function resize(){
+ D=Math.min(devicePixelRatio||1,2);
+ W=innerWidth;H=innerHeight;
+ canvas.width=W*D;canvas.height=H*D;
+ ctx.setTransform(D,0,0,D,0,0);
+}
+addEventListener("resize",resize);resize();
+
+let score=0,wickets=0,balls=0;
+let playing=false,ended=false,phase="ready";
+let ball=null,swipe=null,batSwing=0,toast=0;
+const maxBalls=18,target=30;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const rand=(a,b)=>a+Math.random()*(b-a);
+
+function project(x,y,z){
+ let scale=H/(2+z*5.4);
+ return {x:W/2+x*scale*1.2,
+ y:H*.34+(1.6-y)*scale,s:scale};
+}
+function poly(points,color){
+ ctx.beginPath();
+ points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+ ctx.closePath();ctx.fillStyle=color;ctx.fill();
+}
+function line(a,b,color,width=2){
+ ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);
+ ctx.strokeStyle=color;ctx.lineWidth=width;ctx.stroke();
+}
+function ellipse(x,y,rx,ry,color){
+ ctx.beginPath();ctx.ellipse(x,y,Math.max(1,rx),Math.max(1,ry),0,0,Math.PI*2);
+ ctx.fillStyle=color;ctx.fill();
+}
+function drawWorld(){
+ // Sky
+ let sky=ctx.createLinearGradient(0,0,0,H*.55);
+ sky.addColorStop(0,"#3989c4");
+ sky.addColorStop(1,"#e6dfb7");
+ ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
+ ellipse(W*.8,H*.12,25,25,"#fff1b3");
+
+ // Stadium
+ ctx.fillStyle="#193f48";ctx.fillRect(0,H*.34,W,H*.09);
+ for(let i=0;i<4;i++){
+  ctx.fillStyle=["#3c6069","#294954","#203e49","#16323c"][i];
+  ctx.fillRect(0,H*.34+i*H*.018,W,H*.019);
+ }
+ for(let x=0;x<W;x+=9){
+  ctx.fillStyle=["#e3c38b","#d9e5df","#d86c57","#91b6a2"][Math.floor(x/9)%4];
+  ctx.fillRect(x,H*.345,4,H*.065);
+ }
+
+ // Grass
+ ctx.fillStyle="#4a9e50";ctx.fillRect(0,H*.43,W,H*.57);
+ for(let i=0;i<6;i++){
+  ctx.fillStyle=i%2?"#459448":"#51a451";
+  ctx.fillRect(0,H*.45+i*i*H*.013,W,H*.025);
+ }
+ ctx.beginPath();
+ ctx.ellipse(W/2,H*.83,W*.7,H*.4,0,Math.PI,Math.PI*2);
+ ctx.strokeStyle="#d4edb0";ctx.lineWidth=3;ctx.stroke();
+
+ // Pitch
+ poly([
+  project(-.24,0,20),project(.24,0,20),
+  project(.24,0,-2),project(-.24,0,-2)
+ ],"#c9b18a");
+ for(let z of [16,.45]){
+  line(project(-.2,.02,z),project(.2,.02,z),"#fff3d6",2);
+ }
+
+ // Bowler
+ let b=project(0,1.3,16);
+ ellipse(b.x,b.y+b.s*.35,b.s*.16,b.s*.05,"#0003");
+ ctx.fillStyle="#2858bd";
+ ctx.fillRect(b.x-b.s*.12,b.y-b.s*.6,b.s*.24,b.s*.7);
+ ellipse(b.x,b.y-b.s*.73,b.s*.12,b.s*.13,"#ad7957");
+ line({x:b.x-b.s*.1,y:b.y-b.s*.35},
+      {x:b.x-b.s*.2,y:b.y},"#ad7957",Math.max(2,b.s*.07));
+ line({x:b.x+b.s*.1,y:b.y-b.s*.35},
+      {x:b.x+b.s*.2,y:b.y-.1*b.s},"#ad7957",Math.max(2,b.s*.07));
+
+ // Wickets
+ for(let i=-1;i<=1;i++){
+  let p=project(i*.027,.4,.45);
+  ctx.fillStyle="#f1d49b";
+  ctx.fillRect(p.x-2,p.y-p.s*.72,4,p.s*.72);
+ }
+ line(project(-.06,.78,.45),project(.06,.78,.45),"#ffe5b2",3);
+
+ // Ball
+ if(ball){
+  let p=project(ball.x,ball.y,ball.z);
+  let r=clamp(p.s*.12,3,22);
+  ellipse(p.x+r*.4,p.y+r*1.3,r,r*.35,"#0004");
+  let g=ctx.createRadialGradient(p.x-r*.3,p.y-r*.4,1,p.x,p.y,r);
+  g.addColorStop(0,"#ff7770");g.addColorStop(.5,"#c51d2b");g.addColorStop(1,"#570610");
+  ellipse(p.x,p.y,r,r,g);
+  ctx.save();ctx.translate(p.x,p.y);ctx.rotate(ball.spin);
+  ctx.beginPath();ctx.ellipse(0,0,r*.28,r*.85,.4,0,Math.PI*2);
+  ctx.strokeStyle="#ffe5dc";ctx.lineWidth=1.5;ctx.stroke();ctx.restore();
+ }
+
+ // Bat in the bottom-right
+ ctx.save();ctx.translate(W*.77,H*.83);
+ ctx.rotate(-.4-batSwing*1.4);
+ ctx.fillStyle="#b78143";
+ ctx.beginPath();ctx.roundRect(-W*.018,-H*.17,W*.036,H*.23,5);ctx.fill();
+ ctx.fillStyle="#ead0a0";
+ ctx.fillRect(-W*.009,-H*.21,W*.018,H*.05);
+ ctx.restore();
+
+ if(swipe){
+  ctx.beginPath();ctx.moveTo(swipe.sx,swipe.sy);
+  ctx.lineTo(swipe.x,swipe.y);
+  ctx.strokeStyle="#ffdf77";ctx.lineWidth=4;ctx.stroke();
+ }
+}
+
+function hud(){
+ $("score").textContent=score+" / "+wickets;
+ $("overs").textContent=Math.floor(balls/6)+"."+(balls%6);
+}
+function status(t){$("status").textContent=t}
+function nextBall(){
+ if(balls>=maxBalls||wickets>=10||score>=target){finish();return}
+ phase="delivery";
+ ball={x:rand(-.12,.12),y:1.3,z:1.12,
+       speed:rand(.42,.55),spin:0,bounce:rand(.08,.2)};
+ status("WATCH THE BALL!");
+}
+function start(){
+ score=0;wickets=0;balls=0;playing=true;ended=false;
+ $("menu").classList.add("hidden");hud();nextBall();
+}
+function finish(){
+ playing=false;ended=true;phase="end";
+ $("menu").classList.remove("hidden");
+ $("menu").querySelector("h1").textContent=score>=target?"🏆 YOU WIN!":"🏏 INNINGS OVER";
+ $("menu").querySelectorAll("p")[0].textContent=
+ `Final score: ${score}/${wickets} in ${Math.floor(balls/6)}.${balls%6} overs`;
+ $("play").textContent="PLAY AGAIN";
+}
+function miss(){
+ if(phase!=="delivery")return;
+ wickets++;balls++;phase="result";status("BOWLED! WICKET!");hud();
+ setTimeout(()=>{if(phase==="result")nextBall()},1000);
+}
+function hit(s){
+ if(phase!=="delivery"||!ball)return;
+ let len=Math.hypot(s.dx,s.dy);
+ if(len<14)return;
+ if(ball.z>.24||ball.z<-.12){
+  status(ball.z>.24?"TOO EARLY!":"TOO LATE!");
+  return;
+ }
+ let power=clamp(len/Math.min(W,H),.12,.85);
+ let aim=clamp(s.dx/(W*.45),-1,1);
+ let loft=clamp(-s.dy/(H*.4),-.3,1);
+ ball.vx=aim*(.3+power*.8);
+ ball.vy=.15+loft*.75+power*.15;
+ ball.vz=.45+power*.34;
+ ball.age=0;ball.flight=0;
+ ball.startX=ball.x;ball.startZ=ball.z;
+ ball.power=power;phase="shot";batSwing=1;
+ status(power>.65?"POWER SHOT!":"GOOD SHOT!");
+}
+function scoreShot(){
+ if(phase!=="shot")return;
+ let dist=Math.hypot(ball.x-ball.startX,(ball.z-ball.startZ)*.9);
+ let r=dist>.82&&ball.power>.57?6:
+       ball.z>.83||dist>.82?4:
+       dist>.56?3:dist>.32?2:1;
+ score+=r;balls++;phase="result";
+ status(r===6?"SIX!":r===4?"FOUR!":r+" RUN"+(r>1?"S":""));
+ hud();
+ setTimeout(()=>{if(phase==="result")nextBall()},1000);
+}
+
+canvas.addEventListener("pointerdown",e=>{
+ if(!playing)return;
+ swipe={sx:e.clientX,sy:e.clientY,x:e.clientX,y:e.clientY,dx:0,dy:0};
+ canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointermove",e=>{
+ if(!swipe)return;
+ swipe.x=e.clientX;swipe.y=e.clientY;
+ swipe.dx=swipe.x-swipe.sx;swipe.dy=swipe.y-swipe.sy;
+});
+canvas.addEventListener("pointerup",e=>{
+ if(!swipe)return;
+ swipe.x=e.clientX;swipe.y=e.clientY;
+ swipe.dx=swipe.x-swipe.sx;swipe.dy=swipe.y-swipe.sy;
+ let s={...swipe};swipe=null;hit(s);
+});
+$("play").addEventListener("click",start);
+
+let last=0;
+function loop(now){
+ let dt=Math.min((now-last)/1000||0,.04);last=now;
+ if(playing&&ball){
+  if(phase==="delivery"){
+   ball.z-=ball.speed*dt;ball.spin+=dt*12;
+   ball.y=Math.max(.08,ball.y-ball.bounce*dt);
+   if(ball.z<-.14)miss();
+  }else if(phase==="shot"){
+   ball.age+=dt;ball.flight+=dt;
+   ball.x+=ball.vx*dt;ball.z+=ball.vz*dt;
+   ball.y+=ball.vy*dt;ball.vy-=1.1*dt;
+   ball.spin+=dt*18;
+   if(ball.y<.04){
+    ball.y=.04;ball.vy=Math.abs(ball.vy)*.24;
+    ball.vx*=.8;ball.vz*=.8;
+    if(ball.age>.4)scoreShot();
+   }
+   if(Math.abs(ball.x)>1.5||ball.z>1.05||ball.age>3)scoreShot();
+  }
+ }
+ batSwing=Math.max(0,batSwing-dt*3);
+ drawWorld();
+ requestAnimationFrame(loop);
+}
+hud();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
+
